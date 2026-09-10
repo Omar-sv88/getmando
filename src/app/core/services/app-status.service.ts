@@ -1,5 +1,5 @@
 import { HttpClient } from '@angular/common/http';
-import { effect, inject, Injectable, signal, Signal } from '@angular/core';
+import { DestroyRef, effect, inject, Injectable, signal, Signal } from '@angular/core';
 import { Subscription } from 'rxjs';
 
 import { DashboardConfig } from '../models/dashboard.models';
@@ -56,6 +56,9 @@ export class AppStatusService {
         this.stop();
       }
     });
+    // Root-scoped, so this normally lives for the whole page — but clean up the timer and any
+    // in-flight request if the injector is torn down (SSR, tests).
+    inject(DestroyRef).onDestroy(() => this.stop());
   }
 
   private hasMonitoredApplications(): boolean {
@@ -71,6 +74,9 @@ export class AppStatusService {
 
   private stop(): void {
     this.active = false;
+    // Reset the retry counter: a later start() (config regained a monitored app) is a fresh polling
+    // session and must get the full retry budget again, not inherit an exhausted count.
+    this.retries = 0;
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -87,7 +93,10 @@ export class AppStatusService {
       next: (response) => {
         this.statusesSignal.set(response.apps);
         this.retries = 0;
-        this.scheduleNext(Math.max(response.intervalMs, MIN_POLL_MS));
+        // Guard against a non-finite intervalMs (a misbehaving endpoint): Math.max(NaN, x) is NaN
+        // and setTimeout(fn, NaN) fires almost immediately. The server already clamps its own value.
+        const reported = Number.isFinite(response.intervalMs) ? response.intervalMs : MIN_POLL_MS;
+        this.scheduleNext(Math.max(reported, MIN_POLL_MS));
       },
       error: () => {
         this.retries += 1;

@@ -140,6 +140,30 @@ describe('AppStatusService', () => {
     httpMock.verify();
   });
 
+  it('does not start a second polling loop when the config re-emits while still monitored', async () => {
+    createService();
+    httpMock.expectOne(STATUS_URL).flush(upResponse);
+
+    // A fresh config object that still has a monitored app must not kick off a parallel poll.
+    configState.set(configWith(true));
+    TestBed.flushEffects();
+    httpMock.verify();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    httpMock.expectOne(STATUS_URL).flush(upResponse);
+  });
+
+  it('stops polling when its injector is destroyed', async () => {
+    createService();
+    httpMock.expectOne(STATUS_URL).flush(upResponse); // schedules the next poll for 30s later
+    const controller = httpMock;
+
+    TestBed.resetTestingModule(); // fires DestroyRef.onDestroy
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    controller.verify(); // no further poll was fired after teardown
+  });
+
   it('stores the response apps in the signal and reschedules at the reported intervalMs', async () => {
     createService();
 
@@ -159,6 +183,19 @@ describe('AppStatusService', () => {
 
     httpMock.expectOne(STATUS_URL).flush({ intervalMs: 1_000, apps: {} });
 
+    await vi.advanceTimersByTimeAsync(4_999);
+    httpMock.verify();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expectStatusRequest();
+  });
+
+  it('falls back to MIN_POLL_MS when the server reports a non-finite intervalMs', async () => {
+    createService();
+
+    httpMock.expectOne(STATUS_URL).flush({ intervalMs: null as unknown as number, apps: {} });
+
+    // A NaN would have fired setTimeout almost immediately; MIN_POLL_MS (5s) must be used instead.
     await vi.advanceTimersByTimeAsync(4_999);
     httpMock.verify();
 
@@ -212,6 +249,31 @@ describe('AppStatusService', () => {
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     httpMock.verify();
     expect(statuses()).toEqual({});
+  });
+
+  it('restores the full retry budget when monitoring stops and later restarts', async () => {
+    createService();
+
+    // Exhaust every retry: the bootstrap request plus MAX_RETRIES (4) all fail, so polling stops.
+    httpMock.expectOne(STATUS_URL).error(new ProgressEvent('network error'));
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await vi.advanceTimersByTimeAsync(15_000);
+      httpMock.expectOne(STATUS_URL).error(new ProgressEvent('network error'));
+    }
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    httpMock.verify();
+
+    // Monitoring drops and then comes back — a fresh polling session.
+    configState.set(configWith(false));
+    TestBed.flushEffects();
+    configState.set(configWith(true));
+    TestBed.flushEffects();
+
+    // Its first poll fails but must still be retried (budget reset, not inherited as exhausted).
+    httpMock.expectOne(STATUS_URL).error(new ProgressEvent('network error'));
+    await vi.advanceTimersByTimeAsync(15_000);
+    httpMock.expectOne(STATUS_URL).flush(upResponse);
+    expect(statuses()).toEqual(upResponse.apps);
   });
 
   it('can still retry after an earlier recovered failure (retry count resets on success)', async () => {

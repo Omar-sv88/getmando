@@ -220,3 +220,131 @@ Findings from a `code-review-and-quality` pass over the full feature branch. See
 
 **Phase 4 exit check**: `ng test` and `server/`'s `npm test` both green; `npx tsc -p
 server/tsconfig.json` clean.
+
+## Phase 5: Second Review Pass Fixes
+
+Findings from a second `code-review-and-quality` pass over the merged feature branch.
+
+- [x] 5.1 (Medium) `AppStatusService.stop()` didn't reset the retry counter, so once `MAX_RETRIES`
+      was exhausted, a later stop→start driven by the config losing then regaining its last
+      monitored app inherited the exhausted count: the first failed poll of that fresh session gave
+      up permanently with zero retries. `stop()` now resets `retries` to 0.
+      - Acceptance: after exhausting all retries, a monitoring off→on cycle gets the full retry
+        budget again.
+      - Verify: `ng test` — new test in `app-status.service.spec.ts`.
+      - Files: `src/app/core/services/app-status.service.ts`, `.spec.ts`.
+
+- [x] 5.2 (Medium) `server/src/index.ts` fed `STATUS_CHECK_INTERVAL_MS` straight through `Number()`:
+      a non-numeric value (`30s`) became `NaN` and an empty value became `0`, either of which turns
+      `setInterval` into a request flood against every monitored app. Added
+      `resolveStatusCheckIntervalMs()` — falls back to the default for unset/blank/non-finite input
+      and clamps up to `MIN_STATUS_CHECK_INTERVAL_MS` (1000ms).
+      - Acceptance: a malformed or too-small env value can never produce a sub-second check loop.
+      - Verify: `npm test` in `server/` — new `resolveStatusCheckIntervalMs` describe block.
+      - Files: `server/src/index.ts`, `server/src/status-poller.ts`, `server/src/status-poller.spec.ts`.
+
+- [x] 5.3 (Low) The poller's in-memory cache was never pruned, so an app switched from
+      `healthCheck: true` to `false` (or removed) kept its last status in `GET /api/status`
+      indefinitely — contradicting "`healthCheck: false` apps never appear". Each cycle now deletes
+      cache entries whose id is not in the current monitored set.
+      - Acceptance: a de-monitored app disappears from `GET /api/status` on the next cycle.
+      - Verify: `npm test` in `server/` — new test in `status-poller.spec.ts`.
+      - Files: `server/src/status-poller.ts`, `server/src/status-poller.spec.ts`,
+        `specs/app-status-check/spec.md`.
+
+- [x] 5.4 (Low) `createStatusPoller.start()` set a new `setInterval` without clearing an existing
+      one, leaking a timer if called twice. It now clears any existing timer first.
+      - Acceptance: calling `start()` twice leaves exactly one interval running.
+      - Verify: `npm test` in `server/` — new test in `status-poller.spec.ts`.
+      - Files: `server/src/status-poller.ts`, `server/src/status-poller.spec.ts`.
+
+- [x] 5.5 (Nit) `checkAppStatus` attached no `error` listener to the response stream, so a socket
+      error raised while tearing the response down would surface as an unhandled `error` event and
+      crash the process. Added a no-op `response.on('error', ...)`.
+      - Acceptance: a socket dropped right after headers arrive still resolves `up`, no crash.
+      - Verify: `npm test` in `server/` — new test in `status-checker.spec.ts`.
+      - Files: `server/src/status-checker.ts`, `server/src/status-checker.spec.ts`.
+
+## Phase 6: Third Review Pass Fixes
+
+Findings from a third review pass (two more agents) over the branch.
+
+- [x] 6.1 (Required) `setInterval` fired every `intervalMs` regardless of whether the previous cycle
+      had finished. When `intervalMs` is shorter than the per-check timeout, cycles overlapped:
+      duplicate concurrent checks against every app, and — worse — a stale cycle could `cache.set` an
+      app *after* a newer cycle had pruned it, breaking "`/api/status` only lists monitored apps".
+      `runCycle` now guards on a `cycleInProgress` flag and skips the tick if a cycle is still
+      running, serializing them.
+      - Acceptance: overlapping ticks never raise check concurrency above the monitored-app count; a
+        de-monitored app stays pruned across slow overlapping cycles.
+      - Verify: `npm test` in `server/` — two new tests in `status-poller.spec.ts`.
+      - Files: `server/src/status-poller.ts`, `server/src/status-poller.spec.ts`.
+
+- [x] 6.2 (Required) `resolveStatusCheckIntervalMs` clamped a floor but not a ceiling, so a huge
+      finite value (`STATUS_CHECK_INTERVAL_MS=1e100`) reached `setInterval`, where Node coerces any
+      delay above 2^31-1 ms back to 1ms — recreating the exact flood the floor prevents. Added
+      `MAX_STATUS_CHECK_INTERVAL_MS = 2_147_483_647` and clamp to it.
+      - Acceptance: an oversized value resolves to the Node timer maximum, not 1ms.
+      - Verify: `npm test` in `server/` — extended the `resolveStatusCheckIntervalMs` block.
+      - Files: `server/src/status-poller.ts`, `server/src/status-poller.spec.ts`.
+
+- [x] 6.3 (Minor) `AppStatusService` used `Math.max(response.intervalMs, MIN_POLL_MS)` with no
+      finite check — a misbehaving endpoint returning `null`/`NaN` would schedule `setTimeout(fn,
+      NaN)` (near-immediate). Added a `Number.isFinite` guard that falls back to `MIN_POLL_MS`.
+      - Acceptance: a non-finite reported interval schedules at `MIN_POLL_MS`, not immediately.
+      - Verify: `ng test` — new test in `app-status.service.spec.ts`.
+      - Files: `src/app/core/services/app-status.service.ts`, `.spec.ts`.
+
+- [x] 6.4 (Minor) `AppStatusService` never released its timer/subscription if its injector was torn
+      down (SSR, tests). Added `inject(DestroyRef).onDestroy(() => this.stop())`.
+      - Acceptance: destroying the injector stops all polling.
+      - Verify: `ng test` — new test in `app-status.service.spec.ts`.
+      - Files: `src/app/core/services/app-status.service.ts`, `.spec.ts`.
+
+Not changed (reviewed, no action):
+- `statuses` is intentionally not cleared when an app is de-monitored — badges freeze by design and
+  `AppCardComponent` hides them anyway once `healthCheck` is `false`.
+- `CHANGELOG.md` stays pending until the feature is cut into its release (tasks 3.3); README already
+  documents the field, env var, and behavior.
+
+**Phase 5–6 exit check**: `ng test` (305 passing) and `server/`'s `npm test` (48 passing) both green;
+`npx tsc -p server/tsconfig.json` clean; `ng lint` clean.
+
+## Phase 7: Fourth Review Pass Fixes
+
+- [x] 7.1 (Required — CI) `npm run format:check` (run in CI, `.github/workflows/test.yml`) failed on
+      `app-status.service.spec.ts` — Prettier collapsed a multi-line `.flush(...)` call. Reformatted.
+      - Verify: `npm run format:check` clean.
+      - Files: `src/app/core/services/app-status.service.spec.ts`.
+
+- [x] 7.2 (Required — a11y) The status badge failed WCAG 1.4.1: the up/down state was conveyed by
+      colour alone, and the `<span role="img" aria-label>` was never announced because the parent
+      `<button>` carries its own `aria-label` (which becomes the button's whole accessible name).
+      Fixed both: the badge is now `aria-hidden` and decorative, with the state folded into the
+      button's accessible name via a new `cardLabel` computed (`"Open Plex, currently up"`), and it
+      carries a non-colour cue — the badge stays a circle in both states with a check glyph
+      (`heroCheckMini`) for `up` and a cross (`heroXMarkMini`) for `down`. (An earlier attempt used a
+      circle→diamond shape morph; rejected in review as jarring — a glyph in a constant circle is
+      the conventional status-dot pattern.)
+      - Acceptance: button name includes the state; up/down render different glyphs; AXE still clean.
+      - Verify: `ng test` — updated badge tests in `app-card.component.spec.ts`.
+      - Files: `src/app/shared/components/app-card/app-card.component.ts`, `.html`, `.spec.ts`.
+
+- [x] 7.3 (Optional) `checkAppStatus`'s `{ timeout }` is a socket *inactivity* timeout — a server
+      that drips bytes without ever completing its response headers keeps the socket active and
+      evades it, contradicting the spec's "does not complete within the configured timeout". Added
+      an overall deadline (`setTimeout` → `request.destroy()` → resolve `down`) alongside the socket
+      timeout, cleared on settle.
+      - Acceptance: a trickling server resolves `down` at the deadline, not never.
+      - Verify: `npm test` in `server/` — new test in `status-checker.spec.ts` (raw `net` server).
+      - Files: `server/src/status-checker.ts`, `server/src/status-checker.spec.ts`.
+
+Not changed (reviewed, no action):
+- Nit: once `MAX_RETRIES` is exhausted while apps stay monitored, recovery still needs a page
+  reload — unchanged from the original design (Phase 5.1 already handles the de-monitor→re-monitor
+  path). A still-monitored config re-emit hitting `start()`'s early-return is the documented,
+  intended behavior.
+
+**Phase 7 exit check**: `ng test` (306 passing) and `server/`'s `npm test` (49 passing) both green;
+`npx tsc -p server/tsconfig.json` clean; `ng lint` clean; `npm run format:check` clean;
+`ng build --configuration production` succeeds (pre-existing bundle-budget warning unchanged).

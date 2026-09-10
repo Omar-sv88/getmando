@@ -238,3 +238,40 @@ v2.0.0 on `feature/app-status-indicator` and is targeted for the first release a
   could let that stale response's handler run after polling resumed, scheduling a second, orphaned
   polling loop alongside the new one. Angular's `HttpClient` cancels the underlying request on
   unsubscribe, so the stale response's `next`/`error` handlers now never run at all.
+- **Second review pass** (found after merge, see tasks.md § Phase 5):
+  - `AppStatusService.stop()` now also resets `retries` to 0 — otherwise, once `MAX_RETRIES` was
+    exhausted, a config-driven stop→start (last monitored app removed, then re-added) inherited the
+    exhausted count and the new session gave up on its first failed poll with no retries.
+  - `server/src/index.ts` no longer passes `STATUS_CHECK_INTERVAL_MS` straight through `Number()`
+    (`'30s'` → `NaN`, `''` → `0`, both of which make `setInterval` a request flood). A new
+    `resolveStatusCheckIntervalMs()` falls back to the default for unset/blank/non-finite input and
+    clamps up to `MIN_STATUS_CHECK_INTERVAL_MS` (1000ms).
+  - The poller prunes its in-memory cache each cycle to the current monitored id set, so an app
+    de-opted from `healthCheck` stops appearing in `GET /api/status` (it previously lingered).
+  - `createStatusPoller.start()` clears any existing interval before creating a new one (was a
+    timer leak if called twice), and `checkAppStatus` attaches a no-op `error` listener to the
+    response stream so a socket error during teardown can't crash the process.
+- **Third review pass** (found after merge, see tasks.md § Phase 6):
+  - Poll cycles are now serialized via a `cycleInProgress` flag. `setInterval` previously fired
+    regardless of whether the prior cycle had finished, so an `intervalMs` shorter than the
+    per-check timeout overlapped cycles — duplicate concurrent checks, and a stale cycle able to
+    `cache.set` an app a newer cycle had already pruned. A tick that lands mid-cycle is now skipped.
+  - `resolveStatusCheckIntervalMs` also clamps a ceiling (`MAX_STATUS_CHECK_INTERVAL_MS =
+    2_147_483_647`): Node coerces a `setInterval` delay above 2^31-1 ms back to 1ms, so a huge
+    finite env value would have re-created the flood the floor prevents.
+  - `AppStatusService` guards `response.intervalMs` with `Number.isFinite` before `Math.max`
+    (a `null`/`NaN` from a misbehaving endpoint would otherwise schedule `setTimeout(fn, NaN)`), and
+    registers `DestroyRef.onDestroy(() => this.stop())` to release its timer/subscription if the
+    injector is torn down.
+- **Fourth review pass** (found after merge, see tasks.md § Phase 7):
+  - Status badge accessibility (WCAG 1.4.1): the badge is now `aria-hidden` and decorative. Its
+    `role="img"`/`aria-label` was never announced — `AppCardComponent`'s `<button>` has its own
+    `aria-label`, which is the button's entire accessible name — so the up/down state is folded into
+    that name via a `cardLabel` computed instead. The badge also carries a non-colour cue: it stays
+    a circle in both states, with a check glyph (`heroCheckMini`) for `up` and a cross
+    (`heroXMarkMini`) for `down` — the shape-morph "circle → diamond" first tried in review read as
+    jarring, a glyph inside a constant circle is the conventional status-dot pattern.
+  - `checkAppStatus` adds an overall deadline (`setTimeout` → `request.destroy()` → `down`) next to
+    the socket inactivity timeout: `{ timeout }` alone only fires on an *idle* socket, so a server
+    trickling header bytes forever would otherwise never resolve.
+  - `app-status.service.spec.ts` reformatted to satisfy the CI `format:check` gate.

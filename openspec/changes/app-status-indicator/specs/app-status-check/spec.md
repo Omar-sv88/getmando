@@ -27,8 +27,9 @@ Only applications with `healthCheck: true` MUST be checked.
 ### Requirement: Reachability check semantics
 
 The system MUST treat any HTTP response, regardless of status code, as `up`. The system MUST treat a
-network-level failure (connection refused, reset, DNS failure) or a request that does not complete
-within the configured timeout as `down`. The system MUST accept self-signed or otherwise invalid TLS
+network-level failure (connection refused, reset, DNS failure) or a request whose response headers
+do not arrive within the configured timeout — measured as a total deadline, not merely socket
+inactivity — as `down`. The system MUST accept self-signed or otherwise invalid TLS
 certificates for this check specifically, without weakening TLS verification for any other request in
 the process.
 
@@ -46,6 +47,11 @@ the process.
 - GIVEN an app that never responds
 - WHEN the per-check timeout elapses
 - THEN its status is `down`
+
+#### Scenario: A trickling response still times out
+- GIVEN an app that keeps the connection active but never completes its response headers
+- WHEN the per-check timeout elapses
+- THEN its status is `down` (the timeout is a total deadline, not just an idle timeout)
 
 #### Scenario: Self-signed certificate does not count as down
 - GIVEN an HTTPS app serving a self-signed certificate
@@ -80,7 +86,18 @@ being checked in the same cycle, and MUST NOT crash or otherwise interrupt the s
 
 The system MUST expose `GET /api/status`, unauthenticated, returning the current cached results and
 the configured check interval. The system MUST NOT include an application's `url` or any other
-configuration field in the response.
+configuration field in the response. The system MUST drop a cached result once its application is no
+longer monitored (`healthCheck` set to `false`, or the application removed), so the response only
+ever contains currently-monitored applications.
+
+The system MUST derive the check interval from `STATUS_CHECK_INTERVAL_MS`, falling back to the
+default (`60000`) when it is unset or not a finite number, and clamping it into a bounded range — a
+minimum floor so a small or zero value cannot produce a sub-second check loop, and a maximum ceiling
+within the range the platform's timers support so an oversized value cannot wrap around to one.
+
+The system MUST NOT run poll cycles concurrently: if a cycle is still in progress when the next is
+due, that tick is skipped. This keeps a stale cycle from re-caching an application that a later cycle
+has already dropped.
 
 #### Scenario: Response shape
 - GIVEN at least one `healthCheck: true` app has been checked
@@ -92,6 +109,16 @@ configuration field in the response.
 - GIVEN the sidecar has just started and no poll cycle has completed yet
 - WHEN `GET /api/status` is called
 - THEN the response is `200` with an empty `apps` object
+
+#### Scenario: A de-monitored app drops out of the response
+- GIVEN an app with `healthCheck: true` that has been checked and cached
+- WHEN its `healthCheck` is set to `false` (or it is removed) and the next poll cycle runs
+- THEN `GET /api/status` no longer includes that app id
+
+#### Scenario: Malformed check interval falls back to the default
+- GIVEN `STATUS_CHECK_INTERVAL_MS` is set to a non-numeric value such as `30s`
+- WHEN the sidecar starts
+- THEN the check interval is the default `60000`, not `NaN` or `0`
 
 ### Requirement: Frontend poll cadence tracks the server's interval
 
@@ -142,3 +169,19 @@ requiring a page reload.
 - WHEN the configuration changes to have no monitored applications before that request resolves
 - THEN the request is cancelled
 - AND its response, if any, MUST NOT be used to schedule a further poll
+
+### Requirement: Status badge is accessible
+
+The status badge MUST NOT convey up/down by colour alone (WCAG 1.4.1) and MUST expose the state to
+assistive technology. The badge element itself is decorative; the state is carried in the app card's
+accessible name and by a non-colour visual cue.
+
+#### Scenario: State is in the accessible name
+- GIVEN a monitored app whose last check was `up`
+- WHEN a screen reader reads the app card's activator
+- THEN the state (`up`/`down`) is part of its accessible name
+
+#### Scenario: Non-colour visual cue
+- GIVEN two monitored apps, one `up` and one `down`
+- WHEN their badges are rendered
+- THEN the badges show a different glyph (e.g. check vs cross), not only a different colour

@@ -96,54 +96,99 @@ describe('AppCardComponent', () => {
     await expectNoAxeViolations(view.container);
   });
 
-  it('should render a green badge for a monitored app that is up', async () => {
+  const badgeEl = (container: HTMLElement): HTMLElement | null =>
+    container.querySelector('span[aria-hidden="true"][data-status]');
+
+  it('should render a green check badge and name the state for a monitored app that is up', async () => {
     const view = await setup(
       { ...appFixture, healthCheck: true },
       DEFAULT_DASHBOARD_CONFIG.settings,
       { plex: { status: 'up', checkedAt: '2026-01-01T00:00:00.000Z' } },
     );
 
-    const badge = screen.getByRole('img', { name: 'Plex is up' });
-    expect(badge.className).toContain('bg-emerald-500');
-    expect(badge.className).not.toContain('bg-red-500');
+    // Screen readers get the state through the button name, not the decorative badge.
+    expect(screen.getByRole('button', { name: 'Open Plex, currently up' })).toBeInTheDocument();
+
+    const badge = badgeEl(view.container);
+    expect(badge?.dataset['status']).toBe('up');
+    expect(badge?.className).toContain('bg-emerald-500');
+    expect(badge?.className).toContain('rounded-full'); // always a circle
+    expect(badge?.className).not.toContain('bg-red-500');
+    expect(badge?.querySelector('svg')).toBeTruthy(); // glyph present = non-colour cue
     await expectNoAxeViolations(view.container);
   });
 
-  it('should render a red badge for a monitored app that is down', async () => {
-    await setup({ ...appFixture, healthCheck: true }, DEFAULT_DASHBOARD_CONFIG.settings, {
-      plex: { status: 'down', checkedAt: '2026-01-01T00:00:00.000Z' },
+  it('should render a red cross badge and name the state for a monitored app that is down', async () => {
+    const view = await setup(
+      { ...appFixture, healthCheck: true },
+      DEFAULT_DASHBOARD_CONFIG.settings,
+      { plex: { status: 'down', checkedAt: '2026-01-01T00:00:00.000Z' } },
+    );
+
+    expect(screen.getByRole('button', { name: 'Open Plex, currently down' })).toBeInTheDocument();
+
+    const badge = badgeEl(view.container);
+    expect(badge?.dataset['status']).toBe('down');
+    expect(badge?.className).toContain('bg-red-500');
+    expect(badge?.className).toContain('rounded-full'); // always a circle
+    expect(badge?.className).not.toContain('bg-emerald-500');
+    expect(badge?.querySelector('svg')).toBeTruthy();
+    await expectNoAxeViolations(view.container);
+  });
+
+  it('uses a different glyph for up and down, not colour alone (WCAG 1.4.1)', async () => {
+    const view = await setup(
+      { ...appFixture, healthCheck: true },
+      DEFAULT_DASHBOARD_CONFIG.settings,
+      { plex: { status: 'up', checkedAt: '2026-01-01T00:00:00.000Z' } },
+    );
+    const upGlyph = badgeEl(view.container)?.querySelector('svg')?.innerHTML ?? '';
+
+    statusesState.set({ plex: { status: 'down', checkedAt: '2026-01-01T00:00:00.000Z' } });
+
+    let downGlyph = '';
+    await waitFor(() => {
+      expect(badgeEl(view.container)?.dataset['status']).toBe('down');
+      downGlyph = badgeEl(view.container)?.querySelector('svg')?.innerHTML ?? '';
+      expect(downGlyph).not.toBe('');
     });
 
-    const badge = screen.getByRole('img', { name: 'Plex is down' });
-    expect(badge.className).not.toContain('bg-emerald-500');
-    expect(badge.className).toContain('bg-red-500');
+    expect(upGlyph).not.toBe('');
+    expect(upGlyph).not.toBe(downGlyph);
   });
 
   it('should render no badge when healthCheck is disabled', async () => {
-    await setup(appFixture, DEFAULT_DASHBOARD_CONFIG.settings, {
+    const view = await setup(appFixture, DEFAULT_DASHBOARD_CONFIG.settings, {
       plex: { status: 'up', checkedAt: '2026-01-01T00:00:00.000Z' },
     });
 
-    expect(screen.queryByRole('img', { name: /Plex is (up|down)/ })).not.toBeInTheDocument();
+    expect(badgeEl(view.container)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open Plex' })).toBeInTheDocument();
   });
 
   it('should render no badge while the app has not been checked yet', async () => {
-    await setup({ ...appFixture, healthCheck: true }, DEFAULT_DASHBOARD_CONFIG.settings, {
-      other: { status: 'up', checkedAt: '2026-01-01T00:00:00.000Z' },
-    });
+    const view = await setup(
+      { ...appFixture, healthCheck: true },
+      DEFAULT_DASHBOARD_CONFIG.settings,
+      {
+        other: { status: 'up', checkedAt: '2026-01-01T00:00:00.000Z' },
+      },
+    );
 
-    expect(screen.queryByRole('img', { name: /Plex is (up|down)/ })).not.toBeInTheDocument();
+    expect(badgeEl(view.container)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open Plex' })).toBeInTheDocument();
   });
 
   it('should render the badge once a status arrives after render', async () => {
-    await setup({ ...appFixture, healthCheck: true });
+    const view = await setup({ ...appFixture, healthCheck: true });
 
-    expect(screen.queryByRole('img', { name: /Plex is (up|down)/ })).not.toBeInTheDocument();
+    expect(badgeEl(view.container)).toBeNull();
 
     statusesState.set({ plex: { status: 'up', checkedAt: '2026-01-01T00:00:00.000Z' } });
 
     await waitFor(() => {
-      expect(screen.getByRole('img', { name: 'Plex is up' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Open Plex, currently up' })).toBeInTheDocument();
+      expect(badgeEl(view.container)?.dataset['status']).toBe('up');
     });
   });
 

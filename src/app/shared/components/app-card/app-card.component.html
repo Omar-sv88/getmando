@@ -1,7 +1,7 @@
 <button
   class="w-full bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl h-full p-6 cursor-pointer flex flex-col items-center text-center transition-all duration-300 hover:bg-white/15 hover:shadow-2xl hover:border-white/30 hover:-translate-y-1 hover:scale-105 group"
   type="button"
-  [attr.aria-label]="'Open ' + app().name"
+  [attr.aria-label]="cardLabel()"
   (click)="openApp()"
 >
   <!-- Icon container -->
@@ -13,13 +13,18 @@
       [src]="iconUrl()"
     />
     @if (status(); as status) {
+      <!-- Decorative: the up/down state is announced through the button's aria-label (see
+           cardLabel). The glyph (check / cross) is the non-colour cue for WCAG 1.4.1; the badge
+           stays a circle in both states. -->
       <span
-        role="img"
-        [attr.aria-label]="app().name + ' is ' + status.status"
-        class="absolute -top-2 -right-6 size-3.5 rounded-full ring-2 ring-white/70 transition-all duration-300"
+        aria-hidden="true"
+        [attr.data-status]="status.status"
+        class="absolute -top-2 -right-6 grid size-4 place-items-center rounded-full text-white ring-2 ring-white/70 transition-all duration-300"
         [class.bg-emerald-500]="status.status === 'up'"
         [class.bg-red-500]="status.status === 'down'"
-      ></span>
+      >
+        <ng-icon class="text-[0.7rem]" [name]="statusIcon()" />
+      </span>
     }
   </div>
 

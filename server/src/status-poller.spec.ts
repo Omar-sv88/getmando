@@ -7,7 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DashboardConfig } from '../../src/app/core/models/dashboard.models';
 
-import { createStatusPoller, StatusCheck } from './status-poller';
+import {
+  createStatusPoller,
+  DEFAULT_STATUS_CHECK_INTERVAL_MS,
+  MAX_STATUS_CHECK_INTERVAL_MS,
+  MIN_STATUS_CHECK_INTERVAL_MS,
+  resolveStatusCheckIntervalMs,
+  StatusCheck,
+} from './status-poller';
 
 const configWith = (apps: { id: string; healthCheck: boolean }[]): DashboardConfig => ({
   metadata: { title: 'Mando', description: 'My Selfhosted Applications' },
@@ -180,6 +187,108 @@ describe('createStatusPoller', () => {
     );
   });
 
+  it('forgets cached statuses for apps that are no longer monitored', async () => {
+    await writeConfig(
+      configWith([
+        { id: 'app1', healthCheck: true },
+        { id: 'app2', healthCheck: true },
+      ]),
+    );
+    const poller = createStatusPoller({ configPath, check });
+    poller.start(60_000);
+    await vi.waitFor(() =>
+      expect(Object.keys(poller.getStatuses()).sort()).toEqual(['app1', 'app2']),
+    );
+    poller.stop();
+
+    // app2 loses its healthCheck flag — the next cycle must drop its stale entry.
+    await writeConfig(
+      configWith([
+        { id: 'app1', healthCheck: true },
+        { id: 'app2', healthCheck: false },
+      ]),
+    );
+    poller.start(60_000);
+    await vi.waitFor(() => expect(Object.keys(poller.getStatuses())).toEqual(['app1']));
+    poller.stop();
+  });
+
+  it('never overlaps cycles when a check outlasts the interval', async () => {
+    await writeConfig(
+      configWith([
+        { id: 'app1', healthCheck: true },
+        { id: 'app2', healthCheck: true },
+      ]),
+    );
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const slow: StatusCheck = vi.fn(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      inFlight -= 1;
+      return { status: 'up' as const };
+    });
+    const poller = createStatusPoller({ configPath, check: slow });
+
+    poller.start(20); // far shorter than the 100ms check
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    poller.stop();
+
+    // Two apps checked in parallel within one cycle is expected; overlapping cycles would push
+    // concurrency to 4+ and hammer each app several times over.
+    expect(maxInFlight).toBeLessThanOrEqual(2);
+  });
+
+  it('keeps a de-monitored app pruned even when slow checks span several interval ticks', async () => {
+    await writeConfig(
+      configWith([
+        { id: 'stays', healthCheck: true },
+        { id: 'goes', healthCheck: true },
+      ]),
+    );
+    const check: StatusCheck = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      return { status: 'up' as const };
+    });
+    const poller = createStatusPoller({ configPath, check });
+
+    poller.start(20); // shorter than the 80ms check — cycles would overlap without the guard
+    await vi.waitFor(() =>
+      expect(Object.keys(poller.getStatuses()).sort()).toEqual(['goes', 'stays']),
+    );
+
+    // Without serialized cycles, a cycle that started before this rewrite could resolve its 'goes'
+    // check after a newer cycle pruned it, re-inserting the stale entry.
+    await writeConfig(
+      configWith([
+        { id: 'stays', healthCheck: true },
+        { id: 'goes', healthCheck: false },
+      ]),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    poller.stop();
+
+    expect(Object.keys(poller.getStatuses())).toEqual(['stays']);
+  });
+
+  it('does not leave a second interval running when start() is called twice', async () => {
+    await writeConfig(configWith([{ id: 'app1', healthCheck: true }]));
+    const poller = createStatusPoller({ configPath, check });
+    poller.start(50);
+    poller.start(50);
+
+    await vi.waitFor(() => expect(check.mock.calls.length).toBeGreaterThanOrEqual(2), {
+      timeout: 2_000,
+    });
+    poller.stop();
+
+    const callsAfterStop = check.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 300)); // 6 ticks of the 50ms interval
+    // A leaked second interval would add ~6 more calls; only a single in-flight cycle may still land.
+    expect(check.mock.calls.length).toBeLessThanOrEqual(callsAfterStop + 1);
+  });
+
   it('reports the configured interval, defaulting to 60s before start', () => {
     const poller = createStatusPoller({ configPath, check });
 
@@ -188,5 +297,35 @@ describe('createStatusPoller', () => {
     poller.start(2_000);
     expect(poller.getIntervalMs()).toBe(2_000);
     poller.stop();
+  });
+});
+
+describe('resolveStatusCheckIntervalMs', () => {
+  it('returns the default when the env var is unset or blank', () => {
+    expect(resolveStatusCheckIntervalMs(undefined)).toBe(DEFAULT_STATUS_CHECK_INTERVAL_MS);
+    expect(resolveStatusCheckIntervalMs('')).toBe(DEFAULT_STATUS_CHECK_INTERVAL_MS);
+    expect(resolveStatusCheckIntervalMs('   ')).toBe(DEFAULT_STATUS_CHECK_INTERVAL_MS);
+  });
+
+  it('returns the default for a non-numeric value instead of NaN', () => {
+    expect(resolveStatusCheckIntervalMs('30s')).toBe(DEFAULT_STATUS_CHECK_INTERVAL_MS);
+    expect(resolveStatusCheckIntervalMs('abc')).toBe(DEFAULT_STATUS_CHECK_INTERVAL_MS);
+  });
+
+  it('clamps a value below the floor (including 0 and negatives) up to the minimum', () => {
+    expect(resolveStatusCheckIntervalMs('0')).toBe(MIN_STATUS_CHECK_INTERVAL_MS);
+    expect(resolveStatusCheckIntervalMs('50')).toBe(MIN_STATUS_CHECK_INTERVAL_MS);
+    expect(resolveStatusCheckIntervalMs('-5')).toBe(MIN_STATUS_CHECK_INTERVAL_MS);
+  });
+
+  it('clamps an oversized value (which Node would coerce back to 1ms) down to the timer maximum', () => {
+    expect(resolveStatusCheckIntervalMs('1e100')).toBe(MAX_STATUS_CHECK_INTERVAL_MS);
+    expect(resolveStatusCheckIntervalMs(String(Number.MAX_SAFE_INTEGER))).toBe(
+      MAX_STATUS_CHECK_INTERVAL_MS,
+    );
+  });
+
+  it('passes a valid interval through unchanged', () => {
+    expect(resolveStatusCheckIntervalMs('30000')).toBe(30_000);
   });
 });

@@ -1,6 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
-import { AddressInfo } from 'node:net';
+import net, { AddressInfo } from 'node:net';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -121,6 +121,48 @@ describe('checkAppStatus', () => {
     const startedAt = Date.now();
     await expect(checkAppStatus(`${baseUrl}/`, 250)).resolves.toEqual({ status: 'down' });
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(250);
+  });
+
+  it('resolves up without crashing when the socket drops right after the headers arrive', async () => {
+    const server = http.createServer((_request, response) => {
+      response.writeHead(200);
+      response.flushHeaders();
+      // Kill the connection mid-response: the client sees headers, then a socket error it must
+      // swallow rather than let escape as an unhandled 'error' event.
+      response.socket?.destroy();
+    });
+    servers.push(server);
+    const baseUrl = await listen(server);
+
+    await expect(checkAppStatus(`${baseUrl}/`, 2_000)).resolves.toEqual({ status: 'up' });
+  });
+
+  it('resolves down at the deadline when the server keeps the socket active but never finishes headers', async () => {
+    const server = net.createServer((socket) => {
+      socket.write('HTTP/1.1 200 OK\r\n');
+      // Drip valid-looking header lines forever: the socket stays "active" so the idle timeout
+      // never fires, but the response headers never complete (no final CRLF-CRLF).
+      const drip = setInterval(() => socket.write('X-Keep-Alive: 1\r\n'), 40);
+      const stop = (): void => clearInterval(drip);
+      socket.on('close', stop);
+      socket.on('error', stop);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+
+    try {
+      const startedAt = Date.now();
+      await expect(checkAppStatus(`http://127.0.0.1:${port}/`, 250)).resolves.toEqual({
+        status: 'down',
+      });
+      // Well past an instant error-path resolve (~single-digit ms), and bounded — it waited for
+      // the deadline rather than hanging on the never-ending header stream.
+      const elapsed = Date.now() - startedAt;
+      expect(elapsed).toBeGreaterThanOrEqual(200);
+      expect(elapsed).toBeLessThan(2_000);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it('resolves up for an HTTPS server with a self-signed certificate', async () => {

@@ -8,6 +8,25 @@ import { checkAppStatus } from './status-checker';
 
 export const DEFAULT_STATUS_CHECK_INTERVAL_MS = 60_000;
 export const DEFAULT_CHECK_TIMEOUT_MS = 5_000;
+/** Absolute floor for the poll interval — guards against a misconfigured tiny value (or `0`/`NaN`
+ * from a non-numeric env var) turning the check loop into a request flood against monitored apps. */
+export const MIN_STATUS_CHECK_INTERVAL_MS = 1_000;
+/** Ceiling for the poll interval: Node coerces a `setInterval` delay above 2^31-1 ms back to 1ms,
+ * so an oversized value (`STATUS_CHECK_INTERVAL_MS=1e100`) would produce the very flood the floor
+ * exists to prevent. Clamp anything larger down into the range Node's timers handle. */
+export const MAX_STATUS_CHECK_INTERVAL_MS = 2_147_483_647;
+
+/**
+ * Turns a raw `STATUS_CHECK_INTERVAL_MS` env value into a usable interval: the default when unset or
+ * non-numeric (`Number('30s')` is `NaN`, `Number('')` is `0`), otherwise clamped into
+ * `[MIN_STATUS_CHECK_INTERVAL_MS, MAX_STATUS_CHECK_INTERVAL_MS]`.
+ */
+export function resolveStatusCheckIntervalMs(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_STATUS_CHECK_INTERVAL_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_STATUS_CHECK_INTERVAL_MS;
+  return Math.min(Math.max(parsed, MIN_STATUS_CHECK_INTERVAL_MS), MAX_STATUS_CHECK_INTERVAL_MS);
+}
 
 export interface CachedAppStatus {
   status: 'up' | 'down';
@@ -45,8 +64,22 @@ export function createStatusPoller({
   const cache = new Map<string, CachedAppStatus>();
   let intervalMs = DEFAULT_STATUS_CHECK_INTERVAL_MS;
   let timer: NodeJS.Timeout | undefined;
+  let cycleInProgress = false;
 
   async function runCycle(): Promise<void> {
+    // Serialize cycles: if a check outlasts the interval (interval < per-check timeout), the next
+    // tick is skipped rather than piling concurrent checks on the same apps — and, crucially, a
+    // stale cycle can never resolve after a newer one and re-insert an app the newer cycle pruned.
+    if (cycleInProgress) return;
+    cycleInProgress = true;
+    try {
+      await runCycleOnce();
+    } finally {
+      cycleInProgress = false;
+    }
+  }
+
+  async function runCycleOnce(): Promise<void> {
     let applications;
     try {
       applications = DashboardConfigSchema.parse(load(await readFile(configPath, 'utf8'))).applications;
@@ -58,15 +91,22 @@ export function createStatusPoller({
       return;
     }
 
+    const monitored = applications.filter((application) => application.healthCheck);
+
+    // Drop cached entries for apps that are no longer monitored (healthCheck turned off, or the app
+    // removed) so GET /api/status never reports a stale status for something we've stopped checking.
+    const monitoredIds = new Set(monitored.map((application) => application.id));
+    for (const id of cache.keys()) {
+      if (!monitoredIds.has(id)) cache.delete(id);
+    }
+
     // allSettled, not all: one app's check misbehaving must never stop the others from updating,
     // and must never make this cycle (or the poller) reject.
     const results = await Promise.allSettled(
-      applications
-        .filter((application) => application.healthCheck)
-        .map(async (application) => {
-          const { status } = await check(application.url, checkTimeoutMs);
-          cache.set(application.id, { status, checkedAt: new Date().toISOString() });
-        }),
+      monitored.map(async (application) => {
+        const { status } = await check(application.url, checkTimeoutMs);
+        cache.set(application.id, { status, checkedAt: new Date().toISOString() });
+      }),
     );
     for (const result of results) {
       if (result.status === 'rejected') {
@@ -85,6 +125,9 @@ export function createStatusPoller({
 
   return {
     start(startedIntervalMs: number): void {
+      // Clear any existing timer first, so a second start() can never leave an orphaned interval
+      // running alongside the new one.
+      if (timer !== undefined) clearInterval(timer);
       intervalMs = startedIntervalMs;
       runCycleSafely();
       timer = setInterval(runCycleSafely, intervalMs);

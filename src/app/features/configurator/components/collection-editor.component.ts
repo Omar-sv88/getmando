@@ -22,11 +22,20 @@ type EditableItem = {
   openNewTab?: boolean;
   tags?: readonly string[];
   favorite?: boolean;
+  healthCheck?: boolean;
 };
 type EditableField =
-  'id' | 'name' | 'category' | 'description' | 'url' | 'openNewTab' | 'tags' | 'favorite';
+  | 'id'
+  | 'name'
+  | 'category'
+  | 'description'
+  | 'url'
+  | 'openNewTab'
+  | 'tags'
+  | 'favorite'
+  | 'healthCheck';
 type TextField = Extract<EditableField, 'id' | 'name' | 'category' | 'description' | 'url'>;
-type BooleanField = Extract<EditableField, 'openNewTab' | 'favorite'>;
+type BooleanField = Extract<EditableField, 'openNewTab' | 'favorite' | 'healthCheck'>;
 type ArrayField = Extract<EditableField, 'tags'>;
 type IconField = 'iconType' | 'iconValue';
 
@@ -108,6 +117,7 @@ export class CollectionEditorComponent {
       openNewTab: `Open ${itemLabel} in a new tab`,
       tags: `${capitalized} tags for ${itemLabel}`,
       favorite: `Mark ${itemLabel} as favorite`,
+      healthCheck: `Enable health checks for ${itemLabel}`,
     };
 
     return labels[field];

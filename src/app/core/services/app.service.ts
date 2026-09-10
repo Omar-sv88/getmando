@@ -43,6 +43,7 @@ export class AppService {
             ...bookmark,
             category: BOOKMARKS_CATEGORY.id,
             favorite: false,
+            healthCheck: false,
           }))
         : []
       ).sort((a, b) => a.name.localeCompare(b.name)),

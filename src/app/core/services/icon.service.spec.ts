@@ -19,6 +19,7 @@ describe('IconService', () => {
     openNewTab: true,
     tags: [],
     favorite: false,
+    healthCheck: false,
   };
 
   const decodeSvg = (url: string): string => decodeURIComponent(url.split(',')[1]);

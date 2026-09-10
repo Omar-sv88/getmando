@@ -33,6 +33,7 @@ describe('DashboardComponent', () => {
     openNewTab: true,
     tags: ['video'],
     favorite: false,
+    healthCheck: false,
   };
 
   const settingsState = signal<DashboardSettings>(DEFAULT_DASHBOARD_CONFIG.settings);
@@ -140,6 +141,7 @@ describe('DashboardComponent', () => {
       name: 'Radarr',
       url: 'https://radarr.example.com',
       favorite: false,
+      healthCheck: false,
     };
 
     const view = await render(DashboardComponent, {
@@ -278,6 +280,7 @@ describe('DashboardComponent', () => {
       name: 'Radarr',
       url: 'https://radarr.example.com',
       favorite: false,
+      healthCheck: false,
     };
 
     await setup({

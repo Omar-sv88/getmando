@@ -7,6 +7,7 @@ import {
 const validConfig = (): DashboardConfig => ({
   ...DEFAULT_DASHBOARD_CONFIG,
   categories: [{ id: 'media', name: 'Media' }],
+  bookmarks: [],
   applications: [
     {
       id: 'plex',
@@ -18,6 +19,7 @@ const validConfig = (): DashboardConfig => ({
       openNewTab: true,
       tags: [],
       favorite: false,
+      healthCheck: false,
     },
   ],
 });
@@ -138,6 +140,40 @@ describe('DashboardConfigSchema semantic validation', () => {
     config.applications[0].icon = { type: 'url', value: 'javascript:alert(1)' };
 
     const result = DashboardConfigSchema.safeParse(config);
+
+    expect(result.success).toBe(false);
+  });
+
+  it('defaults healthCheck to false when absent from an application', () => {
+    const { healthCheck: _omitted, ...application } = validConfig().applications[0];
+
+    const result = DashboardConfigSchema.safeParse({
+      ...validConfig(),
+      applications: [application],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.applications[0].healthCheck).toBe(false);
+  });
+
+  it('round-trips an application with healthCheck: true', () => {
+    const config = validConfig();
+    config.applications[0].healthCheck = true;
+
+    const result = DashboardConfigSchema.safeParse(config);
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.applications[0].healthCheck).toBe(true);
+  });
+
+  it('rejects a non-boolean healthCheck value', () => {
+    const config = validConfig();
+    const application = {
+      ...config.applications[0],
+      healthCheck: 'yes',
+    } as unknown as (typeof config.applications)[number];
+
+    const result = DashboardConfigSchema.safeParse({ ...config, applications: [application] });
 
     expect(result.success).toBe(false);
   });

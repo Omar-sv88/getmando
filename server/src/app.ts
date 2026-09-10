@@ -7,12 +7,15 @@ import {
 } from '../../src/app/core/models/dashboard.models';
 
 import { writeConfigAtomically } from './write-config';
+import { DEFAULT_STATUS_CHECK_INTERVAL_MS, StatusPoller } from './status-poller';
 
 export interface AppOptions {
   configWriteToken: string;
   targetPath: string;
   /** Max request body size in bytes. Defaults to 256KB — generous for a dashboard config JSON. */
   bodyLimit?: number;
+  /** Owns the cached app statuses served by GET /api/status. Optional for tests of other routes. */
+  statusPoller?: StatusPoller;
 }
 
 const DEFAULT_BODY_LIMIT = 256 * 1024;
@@ -31,17 +34,9 @@ export function buildApp({
   configWriteToken,
   targetPath,
   bodyLimit = DEFAULT_BODY_LIMIT,
+  statusPoller,
 }: AppOptions): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit });
-
-  // onRequest runs before Fastify parses the body, so an unauthorized request never has its
-  // payload read, per the "before reading or validating its body" requirement.
-  app.addHook('onRequest', async (request, reply) => {
-    const provided = request.headers[CONFIG_TOKEN_HEADER];
-    if (provided !== configWriteToken) {
-      await reply.code(401).send({ status: 'unauthorized' });
-    }
-  });
 
   // Normalizes Fastify's own body-parsing failures (oversized payload, malformed JSON) into the
   // same response shapes the route handler uses, instead of leaking Fastify's default error format.
@@ -57,7 +52,27 @@ export function buildApp({
     return reply.code(error.statusCode ?? 500).send({ status: 'error', message: error.message });
   });
 
-  app.post('/api/config', async (request, reply) => {
+  // Unauthenticated and read-only: exposes only { status, checkedAt } per app id — no URLs or
+  // other config data, mirroring the already-public GET /config/dashboard.yaml.
+  app.get('/api/status', async (_request, reply) => {
+    return reply.code(200).send({
+      intervalMs: statusPoller?.getIntervalMs() ?? DEFAULT_STATUS_CHECK_INTERVAL_MS,
+      apps: statusPoller?.getStatuses() ?? {},
+    });
+  });
+
+  // Route-level onRequest runs before Fastify parses the body, so an unauthorized request never
+  // has its payload read, per the "before reading or validating its body" requirement. An unset
+  // token can never match a provided header (and vice versa), so a token-less sidecar 401s every
+  // write instead of becoming writable.
+  app.post('/api/config', {
+    onRequest: async (request, reply) => {
+      const provided = request.headers[CONFIG_TOKEN_HEADER];
+      if (!configWriteToken || provided !== configWriteToken) {
+        await reply.code(401).send({ status: 'unauthorized' });
+      }
+    },
+  }, async (request, reply) => {
     const result = DashboardConfigSchema.safeParse(request.body);
     if (!result.success) {
       const errors: ParseError[] = result.error.issues.map((issue) => ({

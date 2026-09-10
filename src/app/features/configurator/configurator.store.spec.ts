@@ -22,6 +22,7 @@ const validConfig: DashboardConfig = {
       openNewTab: true,
       tags: [],
       favorite: false,
+      healthCheck: false,
     },
   ],
 };

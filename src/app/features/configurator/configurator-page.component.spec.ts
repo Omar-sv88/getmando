@@ -34,6 +34,7 @@ describe('ConfiguratorPageComponent', () => {
         openNewTab: true,
         tags: [],
         favorite: false,
+        healthCheck: false,
       },
     ],
     bookmarks: [],

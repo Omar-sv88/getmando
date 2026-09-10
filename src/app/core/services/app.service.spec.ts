@@ -80,6 +80,7 @@ describe('AppService', () => {
         openNewTab: true,
         tags: [],
         favorite: false,
+        healthCheck: false,
       };
       configState.set(createConfig({ applications: [app] }));
 
@@ -161,6 +162,7 @@ describe('AppService', () => {
       openNewTab: true,
       tags: [],
       favorite: false,
+      healthCheck: false,
     };
     configState.set(createConfig({ applications: [app] }));
 
@@ -184,6 +186,7 @@ describe('AppService', () => {
               openNewTab: true,
               tags: [],
               favorite: true,
+              healthCheck: false,
             },
             {
               id: 'radarr',
@@ -195,6 +198,7 @@ describe('AppService', () => {
               openNewTab: true,
               tags: [],
               favorite: false,
+              healthCheck: false,
             },
           ],
         }),
@@ -219,6 +223,7 @@ describe('AppService', () => {
               openNewTab: true,
               tags: [],
               favorite: true,
+              healthCheck: false,
             },
             {
               id: 'radarr',
@@ -230,6 +235,7 @@ describe('AppService', () => {
               openNewTab: true,
               tags: [],
               favorite: false,
+              healthCheck: false,
             },
           ],
         }),

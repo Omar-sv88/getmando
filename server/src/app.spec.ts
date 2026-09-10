@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { load } from 'js-yaml';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildApp } from './app';
+import { CachedAppStatus, StatusPoller } from './status-poller';
 
 const token = 'secret-token';
 
@@ -25,6 +26,77 @@ const validConfig = {
   bookmarks: [],
   settings: {},
 };
+
+describe('GET /api/status', () => {
+  let dir: string;
+  let targetPath: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'config-write-api-'));
+    targetPath = join(dir, 'dashboard.yaml');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const pollerWith = (intervalMs: number, apps: Record<string, CachedAppStatus>): StatusPoller => ({
+    start: vi.fn(),
+    stop: vi.fn(),
+    getIntervalMs: () => intervalMs,
+    getStatuses: () => apps,
+  });
+
+  it('returns the cached statuses and the configured interval without any token header', async () => {
+    const apps = { app1: { status: 'up' as const, checkedAt: '2026-01-01T00:00:00.000Z' } };
+    const app = buildApp({
+      configWriteToken: token,
+      targetPath,
+      statusPoller: pollerWith(30_000, apps),
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/api/status' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ intervalMs: 30_000, apps });
+  });
+
+  it('exposes only status and checkedAt per app — no url or other config fields', async () => {
+    const app = buildApp({
+      configWriteToken: token,
+      targetPath,
+      statusPoller: pollerWith(60_000, { app1: { status: 'down', checkedAt: '2026-01-01T00:00:00.000Z' } }),
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/api/status' });
+
+    const body = response.json();
+    expect(Object.keys(body.apps.app1).sort()).toEqual(['checkedAt', 'status']);
+    expect(response.body).not.toContain('url');
+  });
+
+  it('responds 200 with empty apps before any check has completed', async () => {
+    const app = buildApp({
+      configWriteToken: token,
+      targetPath,
+      statusPoller: pollerWith(60_000, {}),
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/api/status' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ intervalMs: 60_000, apps: {} });
+  });
+
+  it('responds 200 with the default interval when no poller is wired up', async () => {
+    const app = buildApp({ configWriteToken: token, targetPath });
+
+    const response = await app.inject({ method: 'GET', url: '/api/status' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ intervalMs: 60_000, apps: {} });
+  });
+});
 
 describe('POST /api/config — token auth', () => {
   let dir: string;
@@ -59,6 +131,33 @@ describe('POST /api/config — token auth', () => {
     });
 
     expect(response.statusCode).toBe(401);
+  });
+
+  it.each([
+    ['no token header', undefined],
+    ['an empty token header', ''],
+    ['any non-empty token header', 'attacker-guess'],
+  ])('401s %s when CONFIG_WRITE_TOKEN is unset', async (_label, headerValue) => {
+    const app = buildApp({ configWriteToken: '', targetPath });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/config',
+      ...(headerValue === undefined ? {} : { headers: { 'x-config-token': headerValue } }),
+      payload: validConfig,
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ status: 'unauthorized' });
+  });
+
+  it('serves GET /api/status without CONFIG_WRITE_TOKEN being set', async () => {
+    const app = buildApp({ configWriteToken: '', targetPath });
+
+    const response = await app.inject({ method: 'GET', url: '/api/status' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ intervalMs: 60_000, apps: {} });
   });
 });
 

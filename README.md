@@ -269,6 +269,7 @@ Each application supports:
 | `openNewTab` | `boolean` | No | `true` | Open in new tab or same window |
 | `tags` | `array[string]` | No | `[]` | Searchable tags |
 | `favorite` | `boolean` | No | `false` | Mark as favorite and show in Favorites category |
+| `healthCheck` | `boolean` | No | `false` | Show a live up/down status badge (see [App Status Indicator](#-app-status-indicator)) |
 
 Application IDs must be unique across the whole configuration, and every `category` value must
 match a declared category ID.
@@ -408,12 +409,41 @@ settings:
 
 ---
 
+### 🟢 App Status Indicator
+
+Applications with `healthCheck: true` show a small badge on their card — a green ✓ when the app is
+reachable, a red ✕ when it is not (a glyph as well as colour, so the state does not rely on colour
+vision). The state is also part of the card's accessible name for screen readers. Checks run
+server-side, from the same container as the dashboard (not from each viewer's browser), so the badge
+reflects reachability from the dashboard host's network.
+
+Semantics and guarantees:
+
+- **Any HTTP response counts as up** (2xx through 5xx). Many self-hosted apps redirect to a login
+  page or return 401/500 while perfectly healthy; only a network-level failure (connection
+  refused/reset, DNS failure) or a timeout (5s per check) counts as down.
+- **Self-signed/invalid TLS certificates are accepted** for these checks specifically — a status
+  dot answers "is something listening", not "does this app have a browser-trusted certificate".
+  TLS verification is unchanged for every other request the process makes.
+- **Opt-in per app, default off** — apps without `healthCheck: true` are never probed, and they
+  show no badge.
+- Checks run every `STATUS_CHECK_INTERVAL_MS` (see [Environment Variables](#environment-variables)),
+  and the badge is unknown (not shown) until the first check completes. Results are cached in
+  memory only — after a container restart every monitored app briefly shows no badge again.
+- The dashboard only polls the status endpoint while at least one application has `healthCheck`
+  enabled — no app monitored means no periodic requests at all — and it picks up or drops polling
+  automatically as the configuration changes.
+- The cached results are served by the unauthenticated, read-only `GET /api/status` endpoint,
+  which exposes only the status and last-checked timestamp per app id — no URLs or other config
+  data.
+
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NODE_ENV` | `production` | Environment mode |
 | `CONFIG_WRITE_TOKEN` | *(unset)* | Shared secret required by the configurator's "Save" action. Unset means the dashboard runs read-only; the write endpoint returns 401 for every request. |
+| `STATUS_CHECK_INTERVAL_MS` | `60000` | How often (in milliseconds) the sidecar re-checks every `healthCheck: true` application. The dashboard polls `GET /api/status` at this same cadence. |
 
 ---
 

@@ -186,6 +186,7 @@ export class ConfiguratorStore {
           openNewTab: true,
           tags: [],
           favorite: false,
+          healthCheck: false,
         },
       ],
     }));

@@ -27,6 +27,7 @@ describe('SearchService', () => {
     openNewTab: true,
     tags: [],
     favorite: false,
+    healthCheck: false,
     ...overrides,
   });
 

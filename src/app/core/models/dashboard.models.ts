@@ -44,6 +44,7 @@ export const SelfhostedAppSchema = z.object({
   openNewTab: z.boolean().default(true),
   tags: z.array(z.string()).default([]),
   favorite: z.boolean().default(false),
+  healthCheck: z.boolean().default(false),
 });
 
 /**

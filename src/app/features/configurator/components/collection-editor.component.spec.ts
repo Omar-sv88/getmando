@@ -230,6 +230,7 @@ describe('CollectionEditorComponent', () => {
     await user.type(screen.getByLabelText('Application tags for Plex'), 'media, streaming');
     await user.click(screen.getByLabelText('Open Plex in a new tab'));
     await user.click(screen.getByLabelText('Mark Plex as favorite'));
+    await user.click(screen.getByLabelText('Enable health checks for Plex'));
 
     expect(edited).toHaveBeenCalledWith({
       index: 0,
@@ -240,6 +241,29 @@ describe('CollectionEditorComponent', () => {
     expect(edited).toHaveBeenCalledWith({ index: 0, field: 'tags', value: ['media', 'streaming'] });
     expect(edited).toHaveBeenCalledWith({ index: 0, field: 'openNewTab', value: false });
     expect(edited).toHaveBeenCalledWith({ index: 0, field: 'favorite', value: true });
+    expect(edited).toHaveBeenCalledWith({ index: 0, field: 'healthCheck', value: true });
+  });
+
+  it('reflects an enabled healthCheck as a checked toggle', async () => {
+    await render(CollectionEditorComponent, {
+      inputs: {
+        collection: 'applications',
+        items: [{ id: 'plex', name: 'Plex', healthCheck: true }],
+      },
+    });
+
+    expect(screen.getByLabelText('Enable health checks for Plex')).toBeChecked();
+  });
+
+  it('does not expose the healthCheck toggle for bookmarks', async () => {
+    await render(CollectionEditorComponent, {
+      inputs: {
+        collection: 'bookmarks',
+        items: [{ id: 'docs', name: 'Docs' }],
+      },
+    });
+
+    expect(screen.queryByLabelText('Enable health checks for Docs')).toBeNull();
   });
 
   it('exposes an accessible bookmark URL field that emits typed draft edits', async () => {

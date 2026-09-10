@@ -53,6 +53,7 @@ export class YamlCodecService {
         openNewTab: application.openNewTab,
         tags: [...application.tags],
         favorite: application.favorite,
+        healthCheck: application.healthCheck,
       })),
       bookmarks: config.bookmarks.map((bookmark) => ({
         id: bookmark.id,

@@ -186,6 +186,23 @@
                     ></span>
                     Favorite
                   </label>
+                  <label
+                    class="inline-flex cursor-pointer items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm font-medium text-neutral-900 transition hover:bg-white/10 dark:text-white"
+                  >
+                    <input
+                      class="peer sr-only"
+                      type="checkbox"
+                      [id]="fieldId(index, 'healthCheck')"
+                      [attr.aria-label]="fieldLabel(item, 'healthCheck')"
+                      [checked]="item.healthCheck ?? false"
+                      (change)="editBoolean(index, 'healthCheck', $event)"
+                    />
+                    <span
+                      aria-hidden="true"
+                      class="relative h-6 w-11 rounded-full border border-white/25 bg-neutral-950/10 transition after:absolute after:left-1 after:top-1 after:size-4 after:rounded-full after:bg-white after:shadow after:transition peer-checked:border-sky-400/60 peer-checked:bg-sky-500/80 peer-checked:after:translate-x-5 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-sky-500 dark:bg-white/10"
+                    ></span>
+                    Health check
+                  </label>
                 }
               </div>
             }

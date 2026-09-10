@@ -21,6 +21,33 @@ describe('YamlCodecService', () => {
     if (result.success) expect(result.config.applications[0].favorite).toBe(false);
   });
 
+  it('round-trips an application healthCheck flag through serialize and parse', () => {
+    const content = service.serialize({
+      ...DEFAULT_DASHBOARD_CONFIG,
+      categories: [{ id: 'media', name: 'Media' }],
+      applications: [
+        {
+          id: 'plex',
+          name: 'Plex',
+          description: 'Media server',
+          url: 'https://plex.example.test',
+          icon: { type: 'name', value: 'plex' },
+          category: 'media',
+          openNewTab: true,
+          tags: [],
+          favorite: false,
+          healthCheck: true,
+        },
+      ],
+    });
+
+    expect(content).toContain('healthCheck: true');
+
+    const result = service.parse(content);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.config.applications[0].healthCheck).toBe(true);
+  });
+
   it('returns actionable paths for YAML that violates semantic validation', () => {
     const result = service.parse(
       `metadata: { title: Test, description: Test }\ncategories: [{ id: apps, name: Apps }]\napplications: [{ id: plex, name: Plex, description: Media, url: https://plex.example.test, icon: { type: name, value: plex }, category: apps }]\nbookmarks: []\nsettings: {}`,
@@ -48,6 +75,7 @@ describe('YamlCodecService', () => {
           openNewTab: true,
           tags: [],
           favorite: false,
+          healthCheck: false,
         },
       ],
     });
@@ -77,6 +105,7 @@ describe('YamlCodecService', () => {
           openNewTab: true,
           tags: [],
           favorite: false,
+          healthCheck: false,
         },
       ],
       settings: {
@@ -105,6 +134,7 @@ describe('YamlCodecService', () => {
           openNewTab: true,
           tags: [],
           favorite: false,
+          healthCheck: false,
         },
       ],
       settings: {
@@ -133,6 +163,7 @@ describe('YamlCodecService', () => {
           openNewTab: true,
           tags: [],
           favorite: false,
+          healthCheck: false,
         },
       ],
     });
